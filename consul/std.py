@@ -1,4 +1,4 @@
-import requests
+import urequests
 
 from consul import base
 
@@ -8,7 +8,7 @@ __all__ = ['Consul']
 class HTTPClient(base.HTTPClient):
     def __init__(self, *args, **kwargs):
         super(HTTPClient, self).__init__(*args, **kwargs)
-        self.session = requests.session()
+        self.session = urequests
 
     @staticmethod
     def response(response):
@@ -16,8 +16,7 @@ class HTTPClient(base.HTTPClient):
         return base.Response(
             response.status_code,
             response.headers,
-            response.text,
-            response.content)
+            response.text, None)
 
     def get(self, callback, path, params=None, headers=None):
         uri = self.uri(path, params)

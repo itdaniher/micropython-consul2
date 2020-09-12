@@ -1,14 +1,7 @@
-import abc
-import base64
-import collections
-import json
-import logging
-import os
-import warnings
-
-import six
-from six.moves import urllib
-
+import ucollections as collections
+import ujson as json
+import ulogging as logging
+import urequests
 log = logging.getLogger(__name__)
 
 
@@ -49,18 +42,6 @@ class Check(object):
     There are three different kinds of checks: script, http and ttl
     """
 
-    @classmethod
-    def script(klass, args, interval):
-        """
-        Run the script *args* every *interval* (e.g. "10s") to peform health
-        check
-        """
-        if isinstance(args, six.string_types) \
-                or isinstance(args, six.binary_type):
-            warnings.warn(
-                "Check.script should take a list of arg", DeprecationWarning)
-            args = ["sh", "-c", args]
-        return {'args': args, 'interval': interval}
 
     @classmethod
     def http(klass, url, interval, timeout=None, deregister=None, header=None,
@@ -110,43 +91,6 @@ class Check(object):
         check is periodically marked as passing.
         """
         return {'ttl': ttl}
-
-    @classmethod
-    def docker(klass, container_id, shell, script, interval, deregister=None):
-        """
-        Invoke *script* packaged within a running docker container with
-        *container_id* at a specified *interval* on the configured
-        *shell* using the Docker Exec API.  Optional *register* after which a
-        failing service will be automatically deregistered.
-        """
-        ret = {
-            'docker_container_id': container_id,
-            'shell': shell,
-            'script': script,
-            'interval': interval
-        }
-        if deregister:
-            ret['DeregisterCriticalServiceAfter'] = deregister
-        return ret
-
-    @classmethod
-    def grpc(klass, grpc, interval, deregister=None):
-        """
-        grpc (string: "") - Specifies a gRPC check's endpoint that
-        supports the standard gRPC health checking protocol.
-        The state of the check will be updated at the given
-        Interval by probing the configured endpoint. Add the
-        service identifier after the gRPC check's endpoint in the
-        following format to check for a specific service instead of
-        the whole gRPC server /:service_identifier.
-        """
-        ret = {
-            'GRPC': grpc,
-            'Interval': interval
-        }
-        if deregister:
-            ret['DeregisterCriticalServiceAfter'] = deregister
-        return ret
 
     @classmethod
     def _compat(
@@ -240,8 +184,6 @@ class CB(object):
         *one* returns only the first item of the list of items. empty lists are
         coerced to None.
 
-        *decode* if specified this key will be base64 decoded.
-
         *is_id* only the 'ID' field of the json object will be returned.
         """
 
@@ -255,7 +197,8 @@ class CB(object):
             if decode:
                 for item in data:
                     if item.get(decode) is not None:
-                        item[decode] = base64.b64decode(item[decode])
+                        item[decode] = urequests.b64decode(item[decode])
+
             if is_id:
                 data = data['ID']
             if one:
@@ -282,40 +225,6 @@ class CB(object):
             return response.content
 
         return cb
-
-
-class HTTPClient(six.with_metaclass(abc.ABCMeta, object)):
-    def __init__(self, host='127.0.0.1', port=8500, scheme='http',
-                 verify=True, cert=None, timeout=None):
-        self.host = host
-        self.port = port
-        self.scheme = scheme
-        self.verify = verify
-        self.base_uri = '%s://%s:%s' % (self.scheme, self.host, self.port)
-        self.cert = cert
-        self.timeout = timeout
-
-    def uri(self, path, params=None):
-        uri = self.base_uri + urllib.parse.quote(path, safe='/:')
-        if params:
-            uri = '%s?%s' % (uri, urllib.parse.urlencode(params))
-        return uri
-
-    @abc.abstractmethod
-    def get(self, callback, path, params=None, headers=None):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def put(self, callback, path, params=None, data='', headers=None):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def delete(self, callback, path, params=None, data='', headers=None):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def post(self, callback, path, params=None, data='', headers=None):
-        raise NotImplementedError
 
 
 class Consul(object):
@@ -351,25 +260,6 @@ class Consul(object):
 
         # TODO: Status
 
-        if os.getenv('CONSUL_HTTP_ADDR'):
-            try:
-                host, port = os.getenv('CONSUL_HTTP_ADDR').split(':')
-                scheme = 'http'
-            except ValueError:
-                try:
-                    scheme, host, port = \
-                        os.getenv('CONSUL_HTTP_ADDR').split(':')
-                    host = host.lstrip('//')
-                except ValueError:
-                    raise ConsulException('CONSUL_HTTP_ADDR (%s) invalid, '
-                                          'does not match <host>:<port> or '
-                                          '<protocol>:<host>:<port>'
-                                          % os.getenv('CONSUL_HTTP_ADDR'))
-        use_ssl = os.getenv('CONSUL_HTTP_SSL')
-        if use_ssl == 'true':
-            scheme = 'https'
-        if os.getenv('CONSUL_HTTP_SSL_VERIFY') is not None:
-            verify = os.getenv('CONSUL_HTTP_SSL_VERIFY') == 'true'
 
         self.acl = Consul.ACL(self)
         self.agent = Consul.Agent(self)
@@ -397,7 +287,7 @@ class Consul(object):
         self.session = Consul.Session(self)
         self.snapshot = Consul.Snapshot(self)
         self.status = Consul.Status(self)
-        self.token = os.getenv('CONSUL_HTTP_TOKEN', token)
+        self.token = token
         self.txn = Consul.Txn(self)
 
     class ACL(object):
@@ -425,8 +315,6 @@ class Consul(object):
             default token.  An *ACLPermissionDenied* exception will be raised
             if a management token is not used.
             """
-            warnings.warn('Consul 1.4.0 deprecated',
-                          DeprecationWarning)
             headers = {}
             token = token or self.agent.token
             if token:
@@ -438,8 +326,6 @@ class Consul(object):
             """
             Returns the token information for *acl_id*.
             """
-            warnings.warn('Consul 1.4.0 deprecated',
-                          DeprecationWarning)
             headers = {}
             token = token or self.agent.token
             if token:
@@ -487,8 +373,6 @@ class Consul(object):
 
             Returns the string *acl_id* for the new token.
             """
-            warnings.warn('Consul 1.4.0 deprecated',
-                          DeprecationWarning)
             headers = {}
             token = token or self.agent.token
             if token:
@@ -538,8 +422,6 @@ class Consul(object):
 
             Returns the string *acl_id* of this token on success.
             """
-            warnings.warn('Consul 1.4.0 deprecated',
-                          DeprecationWarning)
             headers = {}
             token = token or self.agent.token
             if token:
@@ -574,8 +456,6 @@ class Consul(object):
 
             Returns the string of the newly created *acl_id*.
             """
-            warnings.warn('Consul 1.4.0 deprecated',
-                          DeprecationWarning)
             headers = {}
             token = token or self.agent.token
             if token:
@@ -594,8 +474,6 @@ class Consul(object):
 
             Returns *True* on success.
             """
-            warnings.warn('Consul 1.4.0 deprecated',
-                          DeprecationWarning)
             headers = {}
             token = token or self.agent.token
             if token:
@@ -807,14 +685,9 @@ class Consul(object):
 
         class LegacyTokens(object):
             def __init__(self, agent=None):
-                warnings.warn(
-                    'Consul 1.4.0 deprecates the legacy ACL.',
-                    DeprecationWarning)
                 self.agent = agent
 
             def list(self, token=None):
-                warnings.warn('Consul 1.4.0 deprecated',
-                              DeprecationWarning)
                 params = []
                 token = token or self.agent.token
                 if token:
@@ -826,8 +699,6 @@ class Consul(object):
                 """
                 Returns the token information for *acl_id*.
                 """
-                warnings.warn('Consul 1.4.0 deprecated',
-                              DeprecationWarning)
                 params = []
                 token = token or self.agent.token
                 if token:
@@ -842,8 +713,6 @@ class Consul(object):
                        rules=None,
                        acl_id=None,
                        token=None):
-                warnings.warn('Consul 1.4.0 deprecated',
-                              DeprecationWarning)
                 params = []
                 token = token or self.agent.token
                 if token:
@@ -877,8 +746,6 @@ class Consul(object):
 
             def update(self, acl_id, name=None,
                        type=None, rules=None, token=None):
-                warnings.warn('Consul 1.4.0 deprecated',
-                              DeprecationWarning)
                 params = []
                 token = token or self.agent.token
                 if token:
@@ -906,8 +773,6 @@ class Consul(object):
                     data=data)
 
             def clone(self, acl_id, token=None):
-                warnings.warn('Consul 1.4.0 deprecated',
-                              DeprecationWarning)
                 params = []
                 token = token or self.agent.token
                 if token:
@@ -921,8 +786,6 @@ class Consul(object):
                 """
                 Returns *True* on success.
                 """
-                warnings.warn('Consul 1.4.0 deprecated',
-                              DeprecationWarning)
                 params = []
                 token = token or self.agent.token
                 if token:
@@ -2539,10 +2402,6 @@ class Consul(object):
 
     class DiscoveryChain(object):
         def __init__(self, agent):
-            warnings.warn('1.6.0+: The discovery '
-                          'chain API is available '
-                          'in Consul versions 1.6.0 '
-                          'and newer.', DeprecationWarning)
             self.agent = agent
 
         """
@@ -3045,7 +2904,7 @@ class Consul(object):
 
             assert 'value should be None or a string / binary data', \
                 value is None or \
-                isinstance(value, (six.string_types, six.binary_type))
+                isinstance(value, bytes)
 
             params = []
             headers = {}
